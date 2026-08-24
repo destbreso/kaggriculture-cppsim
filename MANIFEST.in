@@ -1,0 +1,6 @@
+include sim/*.hpp
+include python/*.cpp
+include tools/*
+include traces/*.txt
+include tests/*.py
+include LICENSE README.md
