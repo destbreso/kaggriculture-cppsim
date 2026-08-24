@@ -27,11 +27,32 @@ resolution. This repository is that work, carried forward:
   heavy episodes banking 85-114k with shed-cap pressure;
 * **wrapped for Python** so any tool can plug it in.
 
-## Install and use
+## Install
+
+The repo IS the distribution channel, deliberately. No PyPI package,
+and none planned: this is a competition-scoped tool tied to a moving
+engine, the competition ends soon, and a registry package would be
+maintenance with no upside: worse, a stale `pip install kagsim` after a
+rebalance would hand people a confidently wrong simulator. Installing
+from the repo means you always build today's code against today's
+traces, and you read this file on the way in.
 
 ```bash
-pip install .          # builds the extension (needs a C++17 compiler)
+# as a dependency, from anywhere
+pip install git+https://github.com/destbreso/kaggriculture-cppsim
+
+# or pinned in a requirements.txt / pyproject dependency list
+# kagsim @ git+https://github.com/destbreso/kaggriculture-cppsim@main
+
+# or from a local clone, editable while you hack on it
+git clone https://github.com/destbreso/kaggriculture-cppsim
+pip install -e kaggriculture-cppsim
 ```
+
+Needs a C++17 compiler (clang or gcc; on Kaggle's Linux images gcc is
+present). Kaggle NOTEBOOK kernels run without internet, so a git
+install will not work there: clone locally, or attach the repo as a
+Kaggle dataset and `pip install /kaggle/input/<dataset>/`.
 
 ```python
 import kagsim
@@ -50,6 +71,68 @@ results = kagsim.run_many(jobs)            # ~2,000+ episodes/sec/core
 Measured on an Apple-silicon laptop, single core: **~2,100 episodes/sec**
 through the Python API (0.18-0.30 ms/episode for the bare C++ core).
 The real environment runs ~1.2 episodes/sec.
+
+## How to use it well
+
+**Rule one: validate before you trust.** Run the golden test after every
+install and after every engine update, and wire your tools with a
+FALLBACK to the real environment so a divergence degrades to slow
+instead of to wrong:
+
+```python
+def make_bank_fn():
+    """Prefer kagsim; fall back to kaggle_environments if it is absent
+    or fails its self-check. Same signature either way."""
+    try:
+        import kagsim
+        # self-check: one known episode must reproduce exactly
+        s = kagsim.Stream([])                    # idle vs idle
+        b0, b1 = kagsim.run_episode(s, s, seed=11)
+        assert (b0, b1) == (3000.0, 3000.0), "kagsim self-check failed"
+
+        def bank(stream_a, stream_b, seed):
+            return kagsim.run_episode(stream_a, stream_b, seed)
+        bank.backend = "kagsim"
+        return bank
+    except Exception:
+        from kaggle_environments import make
+
+        def bank(actions_a, actions_b, seed):
+            env = make("kaggriculture",
+                       configuration={"episodeSteps": 720,
+                                      "seed": int(seed)})
+            env.reset(2)
+            t = 0
+            while not env.done:
+                a = actions_a[t] if t < len(actions_a) else None
+                b = actions_b[t] if t < len(actions_b) else None
+                env.step([a or {"farmer": ["PASS"], "hands": [],
+                                "market": []},
+                          b or {"farmer": ["PASS"], "hands": [],
+                                "market": []}])
+                t += 1
+            return (float(env.state[0].reward or 0),
+                    float(env.state[1].reward or 0))
+        bank.backend = "kaggle_environments"
+        return bank
+```
+
+Stronger than the smoke self-check: keep one of the bundled traces next
+to your pipeline and assert `tests/test_golden.py` passes in CI or at
+tool start-up. It costs half a second.
+
+**Where kagsim applies, and where it does not:**
+
+* USE IT for anything fixed-vs-fixed: replayed opponents, recorded
+  streams, search populations, arena round-robins, big seed panels.
+* DO NOT use it (yet) for opponents that are live Python callables: the
+  L0 API never calls back into Python. Those games stay on the real
+  environment until the L1 step-mode layer exists: a hybrid evaluator
+  (kagsim for the fixed games, real env for the adaptive ones) is the
+  practical pattern and works well.
+* Re-derive any number you plan to PUBLISH on the real environment at
+  least once. Bit-exact is bit-exact, but the claim should not depend
+  on my build chain.
 
 ## What this is for
 
