@@ -1,0 +1,9 @@
+build/
+*.so
+*.o
+validate
+validate_pristine
+bench
+__pycache__/
+.DS_Store
+*.egg-info/
