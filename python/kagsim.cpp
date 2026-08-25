@@ -1,6 +1,6 @@
 // kagsim: Python bindings for the bit-exact Kaggriculture C++ engine.
 //
-// L0 batch API (this file): pre-convert action streams once, then play
+// L0 batch API: pre-convert action streams once, then play
 // fixed-vs-fixed episodes at C++ speed (~1,000+ eps/sec/core):
 //
 //     import kagsim
@@ -75,37 +75,197 @@ static Order conv_order(const py::handle& h) {
     return o;
 }
 
+static Action conv_action(const py::handle& t) {
+    Action a;
+    a.clear();
+    if (py::isinstance<py::dict>(t)) {
+        auto d = t.cast<py::dict>();
+        if (d.contains("farmer"))
+            a.units[0] = conv_unit(d["farmer"]);
+        int nu = 1;
+        if (d.contains("hands")) {
+            for (const auto& hh : d["hands"].cast<py::list>()) {
+                if (nu >= MAX_UNITS) break;
+                a.units[nu++] = conv_unit(hh);
+            }
+        }
+        a.n_units = nu;
+        if (d.contains("market")) {
+            for (const auto& oo : d["market"].cast<py::list>()) {
+                if (a.n_orders >= 16) break;
+                Order o = conv_order(oo);
+                if (o.op != 0) a.orders[a.n_orders++] = o;
+            }
+        }
+    }
+    return a;
+}
+
 struct Stream {
     std::vector<Action> turns;
     explicit Stream(const py::list& acts) {
         turns.reserve(acts.size());
-        for (const auto& t : acts) {
-            Action a;
-            a.clear();
-            if (py::isinstance<py::dict>(t)) {
-                auto d = t.cast<py::dict>();
-                if (d.contains("farmer"))
-                    a.units[0] = conv_unit(d["farmer"]);
-                int nu = 1;
-                if (d.contains("hands")) {
-                    for (const auto& hh : d["hands"].cast<py::list>()) {
-                        if (nu >= MAX_UNITS) break;
-                        a.units[nu++] = conv_unit(hh);
-                    }
-                }
-                a.n_units = nu;
-                if (d.contains("market")) {
-                    for (const auto& oo : d["market"].cast<py::list>()) {
-                        if (a.n_orders >= 16) break;
-                        Order o = conv_order(oo);
-                        if (o.op != 0) a.orders[a.n_orders++] = o;
-                    }
-                }
-            }
-            turns.push_back(a);
-        }
+        for (const auto& t : acts)
+            turns.push_back(conv_action(t));
     }
     size_t size() const { return turns.size(); }
+};
+
+// ---------------------------------------------------------------- L1
+// Step-mode: the simulator exposed turn by turn, emitting the SAME
+// observation dicts the real interpreter hands each seat, so a Python
+// agent (an adaptive rival, a decision layer, an RL loop) behaves
+// identically inside the simulator. Validated two ways in
+// tests/test_l1.py: a lockstep observation diff against the real
+// environment, and a real adaptive agent reproducing its real-env
+// banks to the dollar.
+
+static const char* ITEM_NAMES[12] = {
+    "WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON", "EGG", "MILK",
+    "WOOL", "FERTILIZER", "GOOSE", "COW", "SHEEP"};
+static const char* SHOP_NAMES[8] = {
+    "BAKERY", "BRUNCH_SPOT", "FARMERS_MARKET", "ICE_CREAM_SHOP",
+    "PET_CAFE", "PIZZA_SHOP", "SMOOTHIE_SHOP", "YARN_STORE"};
+static const char* QUAD_NAMES[4] = {"NW", "NE", "SW", "SE"};
+
+static py::object ser_tile(const Tile& t) {
+    switch (t.kind) {
+    case T_EMPTY:
+        return py::none();
+    case T_LOCKED:
+        return py::str("LOCKED");
+    case T_WEED: {
+        py::dict d;
+        d["kind"] = "WEED";
+        return d;
+    }
+    case T_PLANT: {
+        py::dict d;
+        d["kind"] = "PLANT";
+        d["crop"] = ITEM_NAMES[t.what];
+        d["planted_day"] = static_cast<int>(t.planted_day);
+        d["watered_today"] = t.watered_today;
+        d["consecutive_unwatered"] = static_cast<int>(t.consecutive_dry);
+        d["yield_units"] = static_cast<int>(t.yield_units);
+        d["max_lifespan_step"] = static_cast<int>(t.max_lifespan_step);
+        d["fertilized_until_day"] = static_cast<int>(t.fertilized_until_day);
+        return d;
+    }
+    case T_COOP:
+    case T_PASTURE: {
+        py::dict d;
+        d["kind"] = (t.kind == T_COOP) ? "COOP" : "PASTURE";
+        if (t.has_animal) {
+            d["animal"] = ITEM_NAMES[t.what];
+            d["placed_day"] = static_cast<int>(t.planted_day);
+            d["yield_units"] = static_cast<int>(t.yield_units);
+            d["consecutive_unfed"] = static_cast<int>(t.consecutive_dry);
+            d["fed_today"] = t.fed_today;
+            d["cared_today"] = t.cared_today;
+            d["fertilizer_available"] = t.fertilizer_available;
+            d["pending_care_bonus"] = static_cast<int>(t.pending_care_bonus);
+        }
+        return d;
+    }
+    }
+    return py::none();
+}
+
+static py::dict ser_farm(const Farm& f, int bs) {
+    py::dict d;
+    d["money"] = f.money;
+    py::list tiles;
+    for (int y = 0; y < bs; ++y) {
+        py::list row;
+        for (int x = 0; x < bs; ++x)
+            row.append(ser_tile(f.tiles[y][x]));
+        tiles.append(row);
+    }
+    d["tiles"] = tiles;
+    py::list farmer;
+    farmer.append(static_cast<int>(f.pos_x[0]));
+    farmer.append(static_cast<int>(f.pos_y[0]));
+    d["farmer"] = farmer;
+    py::list hands;
+    for (int u = 1; u < f.n_units; ++u) {
+        py::list p;
+        p.append(static_cast<int>(f.pos_x[u]));
+        p.append(static_cast<int>(f.pos_y[u]));
+        hands.append(p);
+    }
+    d["hands"] = hands;
+    py::list quads;
+    for (int q = 0; q < f.n_quadrants; ++q)
+        quads.append(QUAD_NAMES[q]);
+    d["unlocked_quadrants"] = quads;
+    d["hires_today"] = f.hires_today;
+    return d;
+}
+
+struct Game {
+    Sim sim;
+    explicit Game(uint64_t seed, int steps = 720) {
+        Config c;
+        c.seed = seed;
+        c.episode_steps = steps;
+        sim = Sim(c);
+    }
+    py::dict observe(int player) const {
+        const auto& st = sim.st;
+        py::dict o;
+        o["remainingOverageTime"] = 60;
+        o["step"] = st.step;
+        o["player"] = player;
+        py::list farms;
+        farms.append(ser_farm(st.farms[0], sim.cfg.board_size));
+        farms.append(ser_farm(st.farms[1], sim.cfg.board_size));
+        o["farms"] = farms;
+        py::dict inv, prices;
+        for (int i = 0; i < N_PRODUCTS; ++i) {
+            inv[ITEM_NAMES[i]] = st.market.inventory[i];
+            prices[ITEM_NAMES[i]] = st.market.prices[i];
+        }
+        py::dict market;
+        market["inventory"] = inv;
+        market["prices"] = prices;
+        o["market"] = market;
+        py::list shops;
+        for (int i = 0; i < st.n_shops; ++i)
+            shops.append(SHOP_NAMES[st.shops[i]]);
+        py::dict town;
+        town["unlocked_shops"] = shops;
+        o["town"] = town;
+        o["day"] = st.day;
+        o["hour"] = st.hour;
+        const Farm& f = st.farms[player];
+        py::dict shed;
+        for (int i = 0; i < N_ITEMS; ++i)
+            shed[ITEM_NAMES[i]] = static_cast<int>(f.shed[i]);
+        py::dict seeds;
+        for (int i = 0; i < N_CROPS; ++i)
+            seeds[ITEM_NAMES[i]] = static_cast<int>(f.seeds[i]);
+        py::list invs;
+        for (int u = 0; u < f.n_units; ++u) {
+            py::dict iu;
+            for (int k = 0; k < f.inv_nkeys[u]; ++k) {
+                int item = f.inv_keys[u][k];
+                iu[ITEM_NAMES[item]] = static_cast<int>(f.inv[u][item]);
+            }
+            invs.append(iu);
+        }
+        py::dict priv;
+        priv["shed"] = shed;
+        priv["seeds"] = seeds;
+        priv["inventories"] = invs;
+        o["private"] = priv;
+        return o;
+    }
+    void step(const py::handle& a, const py::handle& b) {
+        sim.step(conv_action(a), conv_action(b));
+    }
+    bool done() const { return sim.st.done; }
+    double reward(int p) const { return sim.reward(p); }
+    int step_count() const { return sim.st.step; }
 };
 
 static std::pair<double, double> run_episode_raw(const Stream& sa,
@@ -152,6 +312,18 @@ PYBIND11_MODULE(kagsim, m) {
               return out;
           },
           py::arg("jobs"), py::arg("steps") = 720);
-    m.attr("__version__") = "0.1.0";
+    py::class_<Game>(m, "Game")
+        .def(py::init<uint64_t, int>(), py::arg("seed"),
+             py::arg("steps") = 720)
+        .def("observe", &Game::observe, py::arg("player"),
+             "The observation dict the real interpreter hands this seat "
+             "at the current step.")
+        .def("step", &Game::step, py::arg("action_a"), py::arg("action_b"),
+             "Advance one turn with raw action dicts "
+             "({farmer, hands, market}).")
+        .def("reward", &Game::reward, py::arg("player"))
+        .def_property_readonly("done", &Game::done)
+        .def_property_readonly("step_count", &Game::step_count);
+    m.attr("__version__") = "0.2.0";
     m.attr("ENGINE_VERSION") = "1.32.7";
 }

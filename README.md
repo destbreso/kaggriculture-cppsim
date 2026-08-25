@@ -91,7 +91,16 @@ Stronger than the smoke self-check: keep one of the bundled traces next to your 
 **Where kagsim applies, and where it does not:**
 
 * USE IT for anything fixed-vs-fixed: replayed opponents, recorded streams, search populations, arena round-robins, big seed panels.
-* DO NOT use it (yet) for opponents that are live Python callables: the L0 API never calls back into Python. Those games stay on the real environment until the L1 step-mode layer exists: a hybrid evaluator (kagsim for the fixed games, real env for the adaptive ones) is the practical pattern and works well.
+* For opponents that are live Python callables, use the L1 step-mode `Game`: it hands your agent the same observation dict the real interpreter builds, turn by turn. Validated two ways (tests/test_l1.py): a lockstep observation diff against the real environment (6/6 bundled traces exact, ~10k field-blocks each), and a heavyweight public adaptive agent reproducing its real-environment final banks to the dollar with a ~15x wall-clock speedup (the remaining cost is the agent's own Python, not the engine).
+
+```python
+game = kagsim.Game(seed)                      # steps=720 by default
+while not game.done:
+    a = my_stream[game.step_count]            # a fixed side, or another agent
+    b = my_agent(game.observe(1))             # your agent, unmodified
+    game.step(a, b)
+print(game.reward(0), game.reward(1))
+```
 * Re-derive any number you plan to PUBLISH on the real environment at least once. Bit-exact is bit-exact, but the claim should not depend on my build chain.
 
 ## What this is for
@@ -132,8 +141,9 @@ tests/      golden test through the bindings
 
 Layers, by design:
 
-* **L0 (this release)**: pre-converted `Stream`s, `run_episode` / `run_many`, GIL released. For fixed-vs-fixed workloads.
-* **L1 (planned)**: step-mode `Env` with dict observations mirroring the real environment: for adaptive agents and RL, at ~100x the real env.
+* **L0**: pre-converted `Stream`s, `run_episode` / `run_many`, GIL released. For fixed-vs-fixed workloads at ~2,000 eps/sec/core.
+* **L1 (since 0.2.0)**: step-mode `Game` with `observe(player)` emitting the real interpreter's observation dicts exactly (tests/test_l1.py is the proof: lockstep-identical against the real environment on every bundled trace, and a public adaptive agent banks identical money inside it). Crossing the C++/Python boundary each turn costs real time, so wall-clock is set by your agent, not the engine: a no-op agent runs hundreds of episodes per second, a heavy one ~15x faster than on the real environment.
+* **L2 (planned)**: many episodes advancing in lockstep with tensor observations, for RL at scale.
 * **L2 (planned)**: vectorized batched envs for serious RL.
 
 ## Version discipline
