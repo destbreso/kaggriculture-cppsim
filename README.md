@@ -129,6 +129,8 @@ python tests/soak_memory.py
 
 The trace format records the actions both agents actually produced plus money and market inventory at every step; `validate` replays the actions and demands equality. If you find a divergence, assume this port is wrong and please open an issue with the trace.
 
+See ROADMAP.md for where the layers stand and why L2 deliberately waits for its first consumer.
+
 ## Architecture
 
 ```
