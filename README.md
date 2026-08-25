@@ -113,6 +113,9 @@ python tests/test_golden.py
 
 # export fresh traces from YOUR environment and check those instead
 python tools/export_trace.py --agents your_agent.py,other.py 11 23 47
+
+# memory soak: RSS trend over 60k episodes + 20k Stream constructions (exit 1 on a leak signature)
+python tests/soak_memory.py
 ```
 
 The trace format records the actions both agents actually produced plus money and market inventory at every step; `validate` replays the actions and demands equality. If you find a divergence, assume this port is wrong and please open an issue with the trace.
