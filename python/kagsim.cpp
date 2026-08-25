@@ -14,6 +14,9 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <atomic>
+#include <thread>
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -303,15 +306,46 @@ PYBIND11_MODULE(kagsim, m) {
           py::arg("steps") = 720);
     m.def("run_many",
           [](const std::vector<std::tuple<const Stream*, const Stream*,
-                                          uint64_t>>& jobs, int steps) {
-              std::vector<std::pair<double, double>> out;
-              out.reserve(jobs.size());
+                                          uint64_t>>& jobs, int steps,
+             int threads) {
+              // Episodes are independent and seeded independently, so this
+              // parallelises with no effect on any result: job i writes only
+              // out[i], the Streams are const and shared read-only, and no
+              // RNG state crosses episodes. Verified by the golden tests,
+              // which are bit-exact.
+              std::vector<std::pair<double, double>> out(jobs.size());
               py::gil_scoped_release rel;
-              for (const auto& [a, b, seed] : jobs)
-                  out.push_back(run_episode_raw(*a, *b, seed, steps));
+              unsigned hw = std::thread::hardware_concurrency();
+              int n = threads > 0 ? threads
+                                  : static_cast<int>(hw ? hw : 1u);
+              n = std::max(1, std::min<int>(n, static_cast<int>(jobs.size())));
+              if (n == 1) {
+                  for (size_t i = 0; i < jobs.size(); ++i) {
+                      const auto& [a, b, seed] = jobs[i];
+                      out[i] = run_episode_raw(*a, *b, seed, steps);
+                  }
+                  return out;
+              }
+              std::atomic<size_t> next{0};
+              std::vector<std::thread> pool;
+              pool.reserve(n);
+              for (int t = 0; t < n; ++t) {
+                  pool.emplace_back([&] {
+                      for (;;) {
+                          size_t i = next.fetch_add(1,
+                                                    std::memory_order_relaxed);
+                          if (i >= jobs.size()) return;
+                          const auto& [a, b, seed] = jobs[i];
+                          out[i] = run_episode_raw(*a, *b, seed, steps);
+                      }
+                  });
+              }
+              for (auto& th : pool) th.join();
               return out;
           },
-          py::arg("jobs"), py::arg("steps") = 720);
+          py::arg("jobs"), py::arg("steps") = 720, py::arg("threads") = 0,
+          "Play many episodes. threads=0 uses every core; 1 forces the "
+          "sequential path. Results are identical either way.");
     py::class_<Game>(m, "Game")
         .def(py::init<uint64_t, int>(), py::arg("seed"),
              py::arg("steps") = 720)
@@ -324,6 +358,6 @@ PYBIND11_MODULE(kagsim, m) {
         .def("reward", &Game::reward, py::arg("player"))
         .def_property_readonly("done", &Game::done)
         .def_property_readonly("step_count", &Game::step_count);
-    m.attr("__version__") = "0.2.0";
+    m.attr("__version__") = "0.3.0";
     m.attr("ENGINE_VERSION") = "1.32.7";
 }

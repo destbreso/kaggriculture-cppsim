@@ -662,6 +662,14 @@ private:
     }
 
     void decay_plants(Farm& f, int step_i) {
+        // PARITY SHORTCUT, and it is a proof rather than a heuristic.
+        // Every assignment of max_lifespan_step is `k * turns_per_day`
+        // (or -1, which the loop rejects), so with an even turns_per_day
+        // the value is even and `(step_i - max_lifespan_step) % 2` equals
+        // `step_i % 2`. On an odd step no tile can satisfy the decay
+        // condition, so the whole scan is provably a no-op. Guarded on
+        // the config so an odd turns_per_day falls back to scanning.
+        if ((cfg.turns_per_day % 2) == 0 && (step_i % 2) != 0) return;
         for (int y = 0; y < cfg.board_size; ++y)
             for (int x = 0; x < cfg.board_size; ++x) {
                 Tile& t = f.tiles[y][x];
