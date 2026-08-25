@@ -42,7 +42,9 @@ jobs = [(stream, idle, seed) for seed in range(2000)]
 results = kagsim.run_many(jobs)            # ~2,000+ episodes/sec/core
 ```
 
-Measured on an Apple-silicon laptop, single core: **~2,100 episodes/sec** through the Python API (0.18-0.30 ms/episode for the bare C++ core). The real environment runs ~1.2 episodes/sec.
+`run_many` uses every core by default and returns results identical to the sequential path, because episodes are independent and seeded independently: pass `threads=1` to force sequential, `threads=N` to cap it.
+
+Measured on a 10-core Apple-silicon laptop: **2,377 episodes/sec single-threaded and 16,122 with `threads=0`**, against ~1.2 episodes/sec for the real environment. The bare C++ core runs an idle episode in 0.27 ms.
 
 ## How to use it well
 
