@@ -7,6 +7,7 @@
 // random() construction, and getrandbits/_randbelow rejection sampling.
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace kag {
@@ -94,8 +95,33 @@ private:
         index_ = N;
     }
 
+    // The constant half of the seeding. init_genrand(19650218) fills the
+    // same 624 words on every construction, so it is a table wearing a
+    // loop's clothes: computed once per process and copied thereafter.
+    // Provably identical output, since it is the same recurrence with the
+    // same constant. It matters because the engine builds a fresh
+    // generator every in-game day, 30 times an episode, and this is a
+    // third of that cost.
+    // public so tools/test_rng_shared.cpp can check the table against the
+    // recurrence it replaces, which is the only way to know it is right
+    // rather than merely fast.
+public:
+    static const uint32_t* genrand_base() {
+        static const std::vector<uint32_t> base = [] {
+            std::vector<uint32_t> m(N);
+            m[0] = 19650218u;
+            for (int i = 1; i < N; ++i)
+                m[i] = 1812433253u * (m[i - 1] ^ (m[i - 1] >> 30))
+                       + static_cast<uint32_t>(i);
+            return m;
+        }();
+        return base.data();
+    }
+
+private:
     void init_by_array(const uint32_t* key, int keylen) {
-        init_genrand(19650218u);
+        std::memcpy(mt_, genrand_base(), sizeof(uint32_t) * N);
+        index_ = N;
         int i = 1, j = 0;
         int k = (N > keylen) ? N : keylen;
         for (; k; --k) {
