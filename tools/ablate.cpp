@@ -28,7 +28,9 @@ using namespace kag;
 using clk = std::chrono::steady_clock;
 
 // Which phase is stubbed for this run. 0 = nothing, the honest baseline.
-int g_skip = 0;
+// It lives in namespace kag because the seam in sim.hpp declares it from
+// inside Sim, so the name it resolves is kag::g_skip.
+namespace kag { int g_skip = 0; }
 
 static double one_episode_us(int seed, int reps) {
     std::vector<double> samples;
@@ -36,9 +38,10 @@ static double one_episode_us(int seed, int reps) {
     Action idle;
     idle.clear();
     for (int r = 0; r < reps; ++r) {
+        Config cfg;
+        cfg.seed = seed + r;              // vary the seed so weeds really re-roll
         auto t0 = clk::now();
-        Sim sim;
-        sim.reset(seed + r);
+        Sim sim(cfg);
         while (!sim.st.done) sim.step(idle, idle);
         auto t1 = clk::now();
         samples.push_back(
