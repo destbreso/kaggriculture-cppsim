@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -54,40 +55,62 @@ static double one_episode_us(int seed, int reps) {
     return samples[samples.size() / 2];          // median, never the mean
 }
 
-int main() {
+int main(int argc, char** argv) {
     const int REPS = 400, SEED = 11;
-    struct Row { const char* name; int id; double us; };
+    // OUTER PASSES. A single pass is not a measurement: taken in two different
+    // idle windows the same binary gave 228 and 208 microseconds an episode,
+    // a 9 % swing, where two passes back to back agreed to 2.7 %. So the tool
+    // repeats the whole ablation and reports the median WITH its range, which
+    // is the standard this work claims everywhere else and did not meet here.
+    const int PASSES = argc > 1 ? atoi(argv[1]) : 7;
+    struct Row { const char* name; int id; std::vector<double> obs; };
     std::vector<Row> rows = {
-        {"apply_unit_actions", 1, 0}, {"process_market", 2, 0},
-        {"town_consume", 3, 0}, {"decay_plants", 4, 0}, {"end_of_day", 5, 0},
+        {"apply_unit_actions", 1, {}}, {"process_market", 2, {}},
+        {"town_consume", 3, {}}, {"decay_plants", 4, {}}, {"end_of_day", 5, {}},
     };
+    std::vector<double> fulls;
 
-    // Interleave the baseline with each ablation rather than batching them, so
-    // a machine that drifts during the run cannot be mistaken for a phase cost.
-    g_skip = 0;
-    double full = one_episode_us(SEED, REPS);
-    double total_delta = 0;
-    for (auto& r : rows) {
+    for (int pass = 0; pass < PASSES; ++pass) {
+        // Interleave the baseline with each ablation rather than batching them,
+        // so a machine that drifts during the run is not read as a phase cost.
         g_skip = 0;
-        double a = one_episode_us(SEED, REPS);
-        g_skip = r.id;
-        double stubbed = one_episode_us(SEED, REPS);
-        g_skip = 0;
-        double b = one_episode_us(SEED, REPS);
-        r.us = (a + b) / 2.0 - stubbed;          // baseline straddles the probe
-        if (r.us > 0) total_delta += r.us;
+        fulls.push_back(one_episode_us(SEED, REPS));
+        for (auto& r : rows) {
+            g_skip = 0;
+            double a = one_episode_us(SEED, REPS);
+            g_skip = r.id;
+            double stubbed = one_episode_us(SEED, REPS);
+            g_skip = 0;
+            double b = one_episode_us(SEED, REPS);
+            r.obs.push_back((a + b) / 2.0 - stubbed);   // baseline straddles it
+        }
     }
     g_skip = 0;
 
-    printf("{\n \"episode_us\": %.2f,\n \"reps\": %d,\n \"seed\": %d,\n",
-           full, REPS, SEED);
+    auto med = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    auto rng_pct = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        double m = v[v.size() / 2];
+        return m != 0 ? 100.0 * (v.back() - v.front()) / m : 0.0;
+    };
+    double full = med(fulls);
+    double total_delta = 0;
+    for (auto& r : rows) if (med(r.obs) > 0) total_delta += med(r.obs);
+
+    printf("{\n \"episode_us\": %.2f,\n \"episode_range_pct\": %.1f,\n"
+           " \"passes\": %d,\n \"reps\": %d,\n \"seed\": %d,\n",
+           full, rng_pct(fulls), PASSES, REPS, SEED);
     printf(" \"note\": \"share is of the summed deltas, not of the episode; "
            "stubs interact and the loop itself is not stubbable\",\n");
     printf(" \"phases\": [\n");
     for (size_t i = 0; i < rows.size(); ++i)
-        printf("  {\"phase\": \"%s\", \"us\": %.2f, \"share_pct\": %.2f}%s\n",
-               rows[i].name, rows[i].us,
-               total_delta > 0 ? 100.0 * rows[i].us / total_delta : 0.0,
+        printf("  {\"phase\": \"%s\", \"us\": %.2f, \"range_pct\": %.1f, "
+               "\"share_pct\": %.2f}%s\n",
+               rows[i].name, med(rows[i].obs), rng_pct(rows[i].obs),
+               total_delta > 0 ? 100.0 * med(rows[i].obs) / total_delta : 0.0,
                i + 1 < rows.size() ? "," : "");
     printf(" ],\n \"summed_deltas_us\": %.2f,\n", total_delta);
     printf(" \"residual_us\": %.2f,\n", full - total_delta);
