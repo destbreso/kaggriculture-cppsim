@@ -122,18 +122,66 @@ private:
     void init_by_array(const uint32_t* key, int keylen) {
         std::memcpy(mt_, genrand_base(), sizeof(uint32_t) * N);
         index_ = N;
+        // Same recurrence as CPython, written to keep only the essential
+        // work in the loop body. The two mixing passes are a serial
+        // dependency chain (each word needs the one before it), so the
+        // wins are what surrounds it, not the arithmetic:
+        //
+        //   * the wrap test `if (i >= N)` is true ONCE in 624 iterations,
+        //     so the loop is split at the wrap instead of testing it every
+        //     time;
+        //   * `mt_[i - 1]` was written by the previous iteration, so it is
+        //     carried in a register rather than reloaded;
+        //   * `j` cycles over keylen, which for a 64-bit seed is 1 or 2,
+        //     so those two cases lose the counter, its test and its reset.
+        //
+        // Output is identical by construction: the operations, their order
+        // and their operands are unchanged.
         int i = 1, j = 0;
         int k = (N > keylen) ? N : keylen;
-        for (; k; --k) {
-            mt_[i] = (mt_[i] ^ ((mt_[i - 1] ^ (mt_[i - 1] >> 30)) * 1664525u)) + key[j] + static_cast<uint32_t>(j);
-            ++i; ++j;
-            if (i >= N) { mt_[0] = mt_[N - 1]; i = 1; }
-            if (j >= keylen) j = 0;
+        uint32_t prev = mt_[0];
+        while (k > 0) {
+            int run = N - i;                       // until the wrap
+            if (run > k) run = k;
+            if (keylen == 1) {
+                const uint32_t kv = key[0];
+                for (int n = run; n; --n) {
+                    prev = (mt_[i] ^ ((prev ^ (prev >> 30)) * 1664525u)) + kv;
+                    mt_[i] = prev;
+                    ++i;
+                }
+            } else if (keylen == 2) {
+                for (int n = run; n; --n) {
+                    prev = (mt_[i] ^ ((prev ^ (prev >> 30)) * 1664525u))
+                           + key[j] + static_cast<uint32_t>(j);
+                    mt_[i] = prev;
+                    ++i;
+                    j ^= 1;                        // 0,1,0,1,...
+                }
+            } else {
+                for (int n = run; n; --n) {
+                    prev = (mt_[i] ^ ((prev ^ (prev >> 30)) * 1664525u))
+                           + key[j] + static_cast<uint32_t>(j);
+                    mt_[i] = prev;
+                    ++i; ++j;
+                    if (j >= keylen) j = 0;
+                }
+            }
+            k -= run;
+            if (i >= N) { mt_[0] = mt_[N - 1]; prev = mt_[0]; i = 1; }
         }
-        for (k = N - 1; k; --k) {
-            mt_[i] = (mt_[i] ^ ((mt_[i - 1] ^ (mt_[i - 1] >> 30)) * 1566083941u)) - static_cast<uint32_t>(i);
-            ++i;
-            if (i >= N) { mt_[0] = mt_[N - 1]; i = 1; }
+        k = N - 1;
+        while (k > 0) {
+            int run = N - i;
+            if (run > k) run = k;
+            for (int n = run; n; --n) {
+                prev = (mt_[i] ^ ((prev ^ (prev >> 30)) * 1566083941u))
+                       - static_cast<uint32_t>(i);
+                mt_[i] = prev;
+                ++i;
+            }
+            k -= run;
+            if (i >= N) { mt_[0] = mt_[N - 1]; prev = mt_[0]; i = 1; }
         }
         mt_[0] = 0x80000000u;
         index_ = N;

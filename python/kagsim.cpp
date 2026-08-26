@@ -358,6 +358,6 @@ PYBIND11_MODULE(kagsim, m) {
         .def("reward", &Game::reward, py::arg("player"))
         .def_property_readonly("done", &Game::done)
         .def_property_readonly("step_count", &Game::step_count);
-    m.attr("__version__") = "0.3.0";
+    m.attr("__version__") = "0.4.0";
     m.attr("ENGINE_VERSION") = "1.32.7";
 }
