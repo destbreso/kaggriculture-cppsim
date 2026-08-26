@@ -312,11 +312,23 @@ public:
         int step_i = st.step;
         int day = step_i / cfg.turns_per_day;
 
+#ifdef KAG_ABLATE
+        // Profiling seam, compiled out of every normal build. tools/ablate.cpp
+        // stubs one phase at a time to price it, because -O3 inlining defeats a
+        // sampling profiler here. Absent from any build that is not that tool.
+        extern int g_skip;
+        if (g_skip != 1) for (int p = 0; p < 2; ++p) apply_unit_actions(p, *acts[p], day);
+        if (g_skip != 2) process_market(*acts[0], *acts[1]);
+        if (g_skip != 3) town_consume(step_i);
+        if (g_skip != 4) for (int p = 0; p < 2; ++p) decay_plants(st.farms[p], step_i);
+        if (g_skip != 5 && (step_i + 1) % cfg.turns_per_day == 0) end_of_day(day);
+#else
         for (int p = 0; p < 2; ++p) apply_unit_actions(p, *acts[p], day);
         process_market(*acts[0], *acts[1]);
         town_consume(step_i);
         for (int p = 0; p < 2; ++p) decay_plants(st.farms[p], step_i);
         if ((step_i + 1) % cfg.turns_per_day == 0) end_of_day(day);
+#endif
 
         st.step = step_i + 1;
         st.day = st.step / cfg.turns_per_day;
