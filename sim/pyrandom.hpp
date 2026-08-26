@@ -100,7 +100,7 @@ private:
     // loop's clothes: computed once per process and copied thereafter.
     // Provably identical output, since it is the same recurrence with the
     // same constant. It matters because the engine builds a fresh
-    // generator every in-game day, 30 times an episode, and this is a
+    // generator every in-game day, 29 times an episode, and this is a
     // third of that cost.
     // public so tools/test_rng_shared.cpp can check the table against the
     // recurrence it replaces, which is the only way to know it is right
