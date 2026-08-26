@@ -40,8 +40,11 @@ static double one_episode_us(int seed, int reps) {
     for (int r = 0; r < reps; ++r) {
         Config cfg;
         cfg.seed = seed + r;              // vary the seed so weeds really re-roll
+        Sim sim(cfg);                     // construction is NOT timed: it is a
+                                          // one-off board reset, and leaving it
+                                          // inside would land in the residual
+                                          // and be read as loop overhead
         auto t0 = clk::now();
-        Sim sim(cfg);
         while (!sim.st.done) sim.step(idle, idle);
         auto t1 = clk::now();
         samples.push_back(
