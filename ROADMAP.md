@@ -20,3 +20,18 @@ Why it waits, stated honestly:
 2. The hard part of L2 is not code, it is the TENSOR ENCODING, and an encoding chosen without the network that will consume it is a representation chosen blind. The correct schema derives from the policy you intend to train, not the other way around.
 
 So L2 gets built together with its first consumer: a self-play RL loop whose network dictates the observation schema. If you are that consumer, open an issue: the engine side is a weekend of work once the schema is fixed, and the state struct in `sim/sim.hpp` already holds everything the planes need.
+
+## Settle telemetry. Shipped.
+
+Per-farm counters at the exact settle sites of what the engine does
+silently (refused purchases per op with the full remaining quantity
+counted at order death, dead SELL units, shed-cap destruction, real hire
+cost), exposed as `Game.telemetry(player)`. Instrumentation only:
+behaviour and parity unaffected, pinned by `tests/test_telemetry.py`
+known-truth scenarios. Built because outside-in reconstruction of these
+events from state deltas is both slower (it needs observations) and
+fragile (same-turn effects confound attribution); engine-side truth costs
+one integer increment at code paths that already exist. Candidate
+extensions if a consumer asks: per-item breakdowns, per-turn event logs
+behind a flag, and mirroring the counters into `run_episode`/`run_many`
+results for L0 batch workloads.

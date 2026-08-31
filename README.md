@@ -133,6 +133,58 @@ The trace format records the actions both agents actually produced plus money an
 
 See ROADMAP.md for where the layers stand and why L2 deliberately waits for its first consumer.
 
+## Settle telemetry: what the engine does in silence, counted
+
+This engine refuses in silence by design: an underfunded purchase simply
+does not happen, a SELL fills only what the settle-time shed holds, the
+shed cap destroys overflow production without a message. From outside, a
+stream that emits those orders looks identical to one that executes them,
+and that gap has produced real measurement errors (an outside-in audit
+once explained a 24-vs-16 disagreement with a subtle biology story when
+the truth was a stale build; with both instruments correct they agree to
+the unit).
+
+`Game.telemetry(player)` returns per-farm counters gathered at the exact
+settle sites:
+
+    {"sell_dead_units": ..,        # SELL units refused: shed empty, full
+                                   # remaining counted at order death
+     "refused_buy_product": ..,    # BUY_PRODUCT units refused (funds/cap)
+     "refused_buy_seed": ..,       # BUY_SEED units refused (funds)
+     "refused_buy_animal": ..,     # BUY_ANIMAL units refused (funds/cap)
+     "refused_hire": ..,           # HIREs refused (funds or unit cap)
+     "refused_buy_land": ..,       # BUY_LANDs refused (funds/none left)
+     "hire_paid": ..,              # coins actually paid for hires
+     "sell_revenue": ..,           # coins actually received from SELLs
+     "total_spend": ..,            # coins actually paid out
+     "shed_discarded_units": ..,   # production the 100-cap destroyed
+     "sold_units": ..}
+
+The counters are instrumentation only: they observe and never alter, so
+behaviour and parity are unaffected (the golden tests and the bank-exact
+parity fixtures pass unchanged). `tests/test_telemetry.py` pins the
+contract with known-truth scenarios: an underfunded 9-cow order counts
+exactly its 2 undeliverable units, an empty-shed SELL of 6 counts 6 dead
+units, a clean game counts zero everywhere.
+
+What it is for, in practice:
+
+* **Error detection**: a search or a hand-edited schedule that silently
+  defunds its own farm shows up as nonzero refused counters instead of a
+  mysteriously weak bank. The first consumer, a schedule GA one repo over,
+  had its best genome exposed as refusing 24 of its own 104 animal buys.
+* **Fitness shaping**: a compliance penalty per refused structural
+  purchase inside a GA's objective costs one counter read per game and
+  removes an entire class of degenerate optima (win by self-demolition).
+* **Optimization niches**: dead sell volume localizes mis-timed sells,
+  `shed_discarded_units` localizes harvest/sell scheduling waste,
+  `hire_paid` against plan expectations localizes financing gaps. Each
+  nonzero counter is a place to look with a magnitude attached.
+
+One build ritual note: `sim.hpp` is a header, so after editing it run
+`touch python/kagsim.cpp` before `build_ext --inplace`, or the extension
+rebuild is silently skipped and you will be reading a stale binary.
+
 ## Architecture
 
 ```
