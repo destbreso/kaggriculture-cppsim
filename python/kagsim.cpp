@@ -207,6 +207,24 @@ static py::dict ser_farm(const Farm& f, int bs) {
 
 struct Game {
     Sim sim;
+    py::dict telemetry(int player) const {
+        const Farm& f = sim.st.farms[player];
+        py::dict t;
+        t["sell_dead_units"] = f.tel_sell_dead;
+        t["refused_buy_product"] = f.tel_refused_product;
+        t["refused_buy_seed"] = f.tel_refused_seed;
+        t["refused_buy_animal"] = f.tel_refused_animal;
+        t["refused_hire"] = f.tel_refused_hire;
+        t["refused_buy_land"] = f.tel_refused_land;
+        t["hire_paid"] = f.tel_hire_paid;
+        t["sell_revenue"] = f.sell_revenue;
+        t["total_spend"] = f.total_spend;
+        int32_t disc = 0, sold = 0;
+        for (int i = 0; i < N_ITEMS; ++i) { disc += f.discarded[i]; sold += f.sold_units[i]; }
+        t["shed_discarded_units"] = disc;
+        t["sold_units"] = sold;
+        return t;
+    }
     explicit Game(uint64_t seed, int steps = 720) {
         Config c;
         c.seed = seed;
@@ -356,6 +374,11 @@ PYBIND11_MODULE(kagsim, m) {
              "Advance one turn with raw action dicts "
              "({farmer, hands, market}).")
         .def("reward", &Game::reward, py::arg("player"))
+        .def("telemetry", &Game::telemetry, py::arg("player"),
+             "Settle telemetry for one player: counters of what the engine "
+             "did SILENTLY (refused purchases by op, dead sell units, shed-"
+             "cap destruction, real hire cost). Instrumentation only; "
+             "behaviour and parity are unaffected.")
         .def_property_readonly("done", &Game::done)
         .def_property_readonly("step_count", &Game::step_count);
     m.attr("__version__") = "0.4.0";

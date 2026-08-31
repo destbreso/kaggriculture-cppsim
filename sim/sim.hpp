@@ -202,6 +202,16 @@ struct Farm {
     int32_t sold_units[N_ITEMS] = {0};
     double  sell_revenue = 0;   // coins actually received from SELLs
     double  total_spend = 0;    // coins actually paid out
+    // Settle telemetry (instrumentation only, same contract as `discarded`):
+    // counters of what the settle does in SILENCE, so an audit reads engine
+    // truth instead of reconstructing it from state deltas outside.
+    int32_t tel_sell_dead = 0;       // SELL units refused: shed empty
+    int32_t tel_refused_product = 0; // BUY_PRODUCT units refused (funds/cap)
+    int32_t tel_refused_seed = 0;    // BUY_SEED units refused (funds)
+    int32_t tel_refused_animal = 0;  // BUY_ANIMAL units refused (funds/cap)
+    int32_t tel_refused_hire = 0;    // HIREs refused (funds or unit cap)
+    int32_t tel_refused_land = 0;    // BUY_LANDs refused (funds/none left)
+    int32_t tel_hire_paid = 0;       // coins actually paid for hires
 
     void inv_add(int u, int item, int n) {
         if (n <= 0) return;
@@ -578,6 +588,15 @@ private:
                     if (commit_unit(q[p].type, q[p].item, q[p].price, st.farms[p])) {
                         os[p].remaining -= 1; committed = true;
                     } else {
+                        // the whole REMAINDER of the order dies here in
+                        // silence; telemetry counts every undelivered unit
+                        Farm& fp = st.farms[p];
+                        switch (os[p].type) {
+                            case M_SELL:        fp.tel_sell_dead += os[p].remaining; break;
+                            case M_BUY_PRODUCT: fp.tel_refused_product += os[p].remaining; break;
+                            case M_BUY_SEED:    fp.tel_refused_seed += os[p].remaining; break;
+                            case M_BUY_ANIMAL:  fp.tel_refused_animal += os[p].remaining; break;
+                        }
                         os[p].live = false;
                     }
                 }
@@ -625,8 +644,9 @@ private:
 
     void do_hire(Farm& f) {
         int cost = cfg.hire_mult * fib(f.hires_today);
-        if (f.money < cost || f.n_units >= MAX_UNITS) return;
+        if (f.money < cost || f.n_units >= MAX_UNITS) { f.tel_refused_hire += 1; return; }
         f.money -= cost; f.total_spend += cost;
+        f.tel_hire_paid += cost;
         f.hires_today += 1;
         // Spawn on the first free shed-access tile (NWSE), ties by occupancy.
         int acc[4][2]; shed_access_tiles(cfg.board_size, acc);
@@ -644,9 +664,9 @@ private:
 
     void do_buy_land(Farm& f) {
         int extra = f.n_quadrants - 1;
-        if (extra >= 3) return;
+        if (extra >= 3) { f.tel_refused_land += 1; return; }
         int cost = LAND_PRICES[extra];
-        if (f.money < cost) return;
+        if (f.money < cost) { f.tel_refused_land += 1; return; }
         f.money -= cost; f.total_spend += cost;
         int quad = LAND_ORDER[extra];
         f.n_quadrants += 1;
