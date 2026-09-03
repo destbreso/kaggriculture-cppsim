@@ -151,6 +151,19 @@ struct Config {
     int center_sell_interval = 24;
     int hire_mult = 1;
     uint64_t seed = 0;
+
+    // FORCED SHOP SEQUENCE, added 2026-09-03. The environment draws each shop
+    // from a generator that spawn_weeds has already advanced once per EMPTY
+    // tile on each farm, so the shops a season unlocks are a function of the
+    // BOARD: suppressing a single planting on day 0 re-rolls all eight of them
+    // and moves the final bank with a standard deviation of 25,842 over 40
+    // seeds. Two agents that plant differently therefore never play the same
+    // world at the same seed, and the difference between them is dominated by
+    // which shops each was dealt. Setting `n_forced_shops` pins the sequence so
+    // a comparison can be made inside ONE world. Everything else, weeds
+    // included, still reads the board exactly as the environment does.
+    uint8_t forced_shops[MAX_SHOP_INSTANCES] = {};
+    int n_forced_shops = 0;
 };
 
 // ---------------------------------------------------------------- state
@@ -729,8 +742,15 @@ private:
             for (int u = 0; u < MAX_UNITS; ++u) f.inv_clear(u);
         }
         int next_day = day + 1;
-        if (next_day > 0 && next_day % cfg.shop_unlock_interval == 0 && st.n_shops < MAX_SHOP_INSTANCES)
-            st.shops[st.n_shops++] = static_cast<uint8_t>(rng.choice_index(N_SHOPS));
+        if (next_day > 0 && next_day % cfg.shop_unlock_interval == 0 && st.n_shops < MAX_SHOP_INSTANCES) {
+            // The draw is consumed either way, so pinning the sequence changes
+            // the shop and nothing else about the generator's history.
+            int drawn = rng.choice_index(N_SHOPS);
+            st.shops[st.n_shops] = (st.n_shops < cfg.n_forced_shops)
+                                       ? cfg.forced_shops[st.n_shops]
+                                       : static_cast<uint8_t>(drawn);
+            ++st.n_shops;
+        }
     }
 
     void daily_refresh_plants(Farm& f, int day) {

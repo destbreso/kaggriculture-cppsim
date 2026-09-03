@@ -205,6 +205,35 @@ static py::dict ser_farm(const Farm& f, int bs) {
     return d;
 }
 
+// A shop sequence given from Python: names in sorted(SHOPS) order, or indices.
+// Anything unrecognised is refused loudly rather than silently ignored, because
+// a pin that quietly does nothing is the worst possible control.
+static void apply_forced_shops(Config& c, const py::object& shops) {
+    if (shops.is_none()) return;
+    static const char* NAMES[N_SHOPS] = {
+        "BAKERY", "BRUNCH_SPOT", "FARMERS_MARKET", "ICE_CREAM_SHOP",
+        "PET_CAFE", "PIZZA_SHOP", "SMOOTHIE_SHOP", "YARN_STORE"};
+    py::list items = py::cast<py::list>(shops);
+    if (py::len(items) > MAX_SHOP_INSTANCES)
+        throw std::invalid_argument("at most 8 shops can be pinned");
+    int n = 0;
+    for (auto h : items) {
+        int idx = -1;
+        if (py::isinstance<py::str>(h)) {
+            std::string s = py::cast<std::string>(h);
+            for (int i = 0; i < N_SHOPS; ++i)
+                if (s == NAMES[i]) { idx = i; break; }
+            if (idx < 0) throw std::invalid_argument("unknown shop name: " + s);
+        } else {
+            idx = py::cast<int>(h);
+            if (idx < 0 || idx >= N_SHOPS)
+                throw std::invalid_argument("shop index out of range");
+        }
+        c.forced_shops[n++] = static_cast<uint8_t>(idx);
+    }
+    c.n_forced_shops = n;
+}
+
 struct Game {
     Sim sim;
     py::dict telemetry(int player) const {
@@ -225,10 +254,12 @@ struct Game {
         t["sold_units"] = sold;
         return t;
     }
-    explicit Game(uint64_t seed, int steps = 720) {
+    explicit Game(uint64_t seed, int steps = 720,
+                  const py::object& shops = py::none()) {
         Config c;
         c.seed = seed;
         c.episode_steps = steps;
+        apply_forced_shops(c, shops);
         sim = Sim(c);
     }
     py::dict observe(int player) const {
@@ -289,12 +320,36 @@ struct Game {
     int step_count() const { return sim.st.step; }
 };
 
+
+static std::pair<double, double> run_episode_raw_pinned(const Stream& sa,
+                                                        const Stream& sb,
+                                                        uint64_t seed, int steps,
+                                                        const Config& pinned) {
+    Config c = pinned;
+    c.seed = seed;
+    c.episode_steps = steps;
+    Sim sim(c);
+    Action empty;
+    empty.clear();
+    for (int t = 0; !sim.st.done; ++t) {
+        const Action& a = (t < static_cast<int>(sa.turns.size()))
+                              ? sa.turns[t] : empty;
+        const Action& b = (t < static_cast<int>(sb.turns.size()))
+                              ? sb.turns[t] : empty;
+        sim.step(a, b);
+        if (t > steps + 8) break;
+    }
+    return {sim.reward(0), sim.reward(1)};
+}
+
 static std::pair<double, double> run_episode_raw(const Stream& sa,
                                                  const Stream& sb,
-                                                 uint64_t seed, int steps) {
+                                                 uint64_t seed, int steps,
+                                                 const py::object& shops = py::none()) {
     Config c;
     c.seed = seed;
     c.episode_steps = steps;
+    apply_forced_shops(c, shops);
     Sim sim(c);
     Action empty;
     empty.clear();
@@ -316,12 +371,15 @@ PYBIND11_MODULE(kagsim, m) {
         .def(py::init<const py::list&>())
         .def("__len__", &Stream::size);
     m.def("run_episode",
-          [](const Stream& a, const Stream& b, uint64_t seed, int steps) {
+          [](const Stream& a, const Stream& b, uint64_t seed, int steps,
+             const py::object& shops) {
+              Config probe;
+              apply_forced_shops(probe, shops);      // validate before releasing
               py::gil_scoped_release rel;
-              return run_episode_raw(a, b, seed, steps);
+              return run_episode_raw_pinned(a, b, seed, steps, probe);
           },
           py::arg("stream_a"), py::arg("stream_b"), py::arg("seed"),
-          py::arg("steps") = 720);
+          py::arg("steps") = 720, py::arg("shops") = py::none());
     m.def("run_many",
           [](const std::vector<std::tuple<const Stream*, const Stream*,
                                           uint64_t>>& jobs, int steps,
@@ -365,8 +423,8 @@ PYBIND11_MODULE(kagsim, m) {
           "Play many episodes. threads=0 uses every core; 1 forces the "
           "sequential path. Results are identical either way.");
     py::class_<Game>(m, "Game")
-        .def(py::init<uint64_t, int>(), py::arg("seed"),
-             py::arg("steps") = 720)
+        .def(py::init<uint64_t, int, const py::object&>(), py::arg("seed"),
+             py::arg("steps") = 720, py::arg("shops") = py::none())
         .def("observe", &Game::observe, py::arg("player"),
              "The observation dict the real interpreter hands this seat "
              "at the current step.")
